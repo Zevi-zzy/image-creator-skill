@@ -1,0 +1,14 @@
+# API keys - NEVER commit
+.api_key
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
