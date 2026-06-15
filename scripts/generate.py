@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Image Creator - OpenRouter API Image Generation Script
+Image Creator - API Router Image Generation Script
 
 Supports two modes:
-  - text2img: Generate image from text prompt via /images/generations
+  - text2img: Generate image from text prompt via /chat/completions
   - img2img:  Generate image from text prompt + reference image via /chat/completions
 
 Usage:
@@ -15,6 +15,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import sys
 import urllib.request
 import urllib.error
@@ -89,19 +90,18 @@ def download_and_save_image(url_or_b64, output_path):
         return output_path
     else:
         # HTTP URL
-        ctx = ssl.create_default_context()
         urllib.request.urlretrieve(url_or_b64, output_path)
         return output_path
 
 
 def _extract_image_from_chat_response(message, output_path):
     """Extract image from chat/completions response message.
-    Image may be in: message.images (OpenRouter native), message.content (list or string).
+    Image may be in: message.images (native field), message.content (list or string).
     Returns True if saved successfully.
     """
     ensure_output_dir(output_path)
 
-    # Case 1: OpenRouter returns images in dedicated 'images' field
+    # Case 1: Dedicated 'images' field
     images = message.get("images", [])
     if images:
         for img in images:
@@ -127,7 +127,6 @@ def _extract_image_from_chat_response(message, output_path):
 
     # Case 3: content is a string with markdown image link or data URI
     if isinstance(content, str):
-        import re
         md_urls = re.findall(r'!\[.*?\]\((https?://\S+)\)', content)
         bare_urls = re.findall(r'(https?://\S+\.(?:png|jpg|jpeg|webp|gif))', content)
         all_urls = md_urls + bare_urls
@@ -144,61 +143,12 @@ def _extract_image_from_chat_response(message, output_path):
     return False
 
 
-def text2img(api_key, prompt, size, output_path):
-    """Generate image from text prompt.
-    Tries /images/generations first, falls back to /chat/completions.
-    """
-    # Try /images/generations endpoint first
-    try:
-        url = f"{BASE_URL}/images/generations"
-        payload = {
-            "model": MODEL,
-            "prompt": prompt,
-            "n": 1,
-            "size": size,
-        }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-
-        # Parse standard images/generations response
-        if "data" in result and result["data"]:
-            image_data = result["data"][0]
-            image_url = image_data.get("url", "")
-            b64_json = image_data.get("b64_json", "")
-            if image_url:
-                download_and_save_image(image_url, output_path)
-                print(f"Image saved to: {output_path}")
-                return output_path
-            elif b64_json:
-                data_uri = f"data:image/png;base64,{b64_json}"
-                download_and_save_image(data_uri, output_path)
-                print(f"Image saved to: {output_path}")
-                return output_path
-        elif "error" in result:
-            print(f"/images/generations error: {result['error']}", file=sys.stderr)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        print(f"/images/generations returned {e.code}, falling back to /chat/completions...", file=sys.stderr)
-    except Exception as e:
-        print(f"/images/generations failed: {e}, falling back to /chat/completions...", file=sys.stderr)
-
-    # Fallback: use /chat/completions endpoint (works for both text2img and img2img models)
-    print("Using /chat/completions fallback for text2img generation...")
+def _call_chat_completions(api_key, messages):
+    """Call /chat/completions endpoint and return the message object."""
     url = f"{BASE_URL}/chat/completions"
     payload = {
         "model": MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": f"Generate an image: {prompt}",
-            }
-        ],
+        "messages": messages,
     }
     headers = {
         "Content-Type": "application/json",
@@ -222,7 +172,17 @@ def text2img(api_key, prompt, size, output_path):
         print(f"Unexpected response: {json.dumps(result, indent=2)[:500]}", file=sys.stderr)
         sys.exit(1)
 
-    message = result["choices"][0].get("message", {})
+    return result["choices"][0].get("message", {})
+
+
+def text2img(api_key, prompt, size, output_path):
+    """Generate image from text prompt via /chat/completions."""
+    message = _call_chat_completions(api_key, [
+        {
+            "role": "user",
+            "content": f"Generate an image: {prompt}",
+        }
+    ])
 
     if _extract_image_from_chat_response(message, output_path):
         print(f"Image saved to: {output_path}")
@@ -235,53 +195,21 @@ def text2img(api_key, prompt, size, output_path):
 
 
 def img2img(api_key, prompt, input_image_path, size, output_path):
-    """Generate image from text prompt + reference image using /chat/completions endpoint."""
-    url = f"{BASE_URL}/chat/completions"
-
-    # Convert input image to base64
+    """Generate image from text prompt + reference image via /chat/completions."""
     image_data_uri = image_to_base64(input_image_path)
 
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": image_data_uri},
-                    },
-                ],
-            }
-        ],
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
-
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        print(f"API Error {e.code}: {body}", file=sys.stderr)
-        sys.exit(1)
-    except urllib.error.URLError as e:
-        print(f"Network Error: {e.reason}", file=sys.stderr)
-        sys.exit(1)
-
-    # Parse response - image may be in different formats
-    if "choices" not in result or not result["choices"]:
-        print(f"Unexpected response: {json.dumps(result, indent=2)[:500]}", file=sys.stderr)
-        sys.exit(1)
-
-    message = result["choices"][0].get("message", {})
+    message = _call_chat_completions(api_key, [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_data_uri},
+                },
+            ],
+        }
+    ])
 
     if _extract_image_from_chat_response(message, output_path):
         print(f"Image saved to: {output_path}")
@@ -292,8 +220,6 @@ def img2img(api_key, prompt, input_image_path, size, output_path):
         print(f"Response content preview: {str(content)[:500]}", file=sys.stderr)
         sys.exit(1)
 
-    return output_path
-
 
 def main():
     parser = argparse.ArgumentParser(description="Image Creator - API Router Image Generation")
@@ -302,7 +228,7 @@ def main():
     parser.add_argument("--input-image", help="Path to reference image (required for img2img mode)")
     parser.add_argument("--size", default="1024x1792", help="Image size, e.g. 1024x1792 (default: 1024x1792)")
     parser.add_argument("--output", default="/tmp/poster-output.png", help="Output file path (default: /tmp/poster-output.png)")
-    parser.add_argument("--api-key", help="OpenRouter API key (overrides env var and stored key)")
+    parser.add_argument("--api-key", help="API Router key (overrides env var and stored key)")
     parser.add_argument("--save-key", help="Save the provided API key for future use", action="store_true")
 
     args = parser.parse_args()
