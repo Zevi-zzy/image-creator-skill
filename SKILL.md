@@ -1,6 +1,6 @@
 ---
 name: image-creator
-description: "通用图片创作 Skill - 基于 OpenRouter API (openai/gpt-5.4-image-2)，支持文生图和图生图两种模式。从需求确认到 Prompt 构建再到 API 调用，全流程自动化。关键词：图片生成、生成图片、文生图、图生图、海报、海报创作、宣传图、海报设计、创作图片、生成海报、做海报"
+description: "通用图片创作 Skill - 基于 API Router (gpt-image-2)，支持文生图和图生图两种模式。从需求确认到 Prompt 构建再到 API 调用，全流程自动化。关键词：图片生成、生成图片、文生图、图生图、海报、海报创作、宣传图、海报设计、创作图片、生成海报、做海报"
 version: "1.0.0"
 author: "CodeBuddy AI"
 agent_created: true
@@ -9,7 +9,7 @@ allowed-tools: Bash, Read, Write, AskUserQuestion
 
 # 通用图片创作 Skill
 
-> **Goal**: 基于 OpenRouter API 调用 `openai/gpt-5.4-image-2` 模型，支持文生图（从零创作）和图生图（基于参考图改造）两种模式，为用户生成高质量图片。
+> **Goal**: 基于 API Router 调用 `gpt-image-2` 模型，支持文生图（从零创作）和图生图（基于参考图改造）两种模式，为用户生成高质量图片。
 
 ## When to Use
 
@@ -62,21 +62,21 @@ allowed-tools: Bash, Read, Write, AskUserQuestion
 
 #### 1.2 API Key 检查
 
-**⚠️ 在进入需求确认之前，必须先确保有可用的 OpenRouter API Key。**
+**⚠️ 在进入需求确认之前，必须先确保有可用的 API Key。**
 
 检查顺序：
-1. 检查环境变量 `OPENROUTER_API_KEY`
+1. 检查环境变量 `API_ROUTER_KEY`
 2. 读取 `~/.workbuddy/skills/image-creator/.api_key` 文件（如果存在）
 3. 如果都没找到 → **直接用 AskUserQuestion 问用户**：
 
 ```
 AskUserQuestion({
   questions: [{
-    question: "需要你的 OpenRouter API Key 才能调用图片生成。请在下方「其他」输入框中粘贴你的 Key（在 https://openrouter.ai/keys 获取）",
+    question: "需要你的 API Key 才能调用图片生成。请在下方「其他」输入框中粘贴你的 Key",
     header: "API Key",
     options: [
-      { label: "我已有 Key，直接粘贴", description: "在下方输入框粘贴你的 OpenRouter API Key" },
-      { label: "我还没有 Key", description: "需要先去 OpenRouter 创建 API Key" }
+      { label: "我已有 Key，直接粘贴", description: "在下方输入框粘贴你的 API Key" },
+      { label: "我还没有 Key", description: "需要先获取 API Key" }
     ]
   }]
 })
@@ -317,14 +317,14 @@ Warm and comfortable atmosphere, color tones leaning toward warm brown, beige, a
 
 | 参数 | 值 |
 |------|-----|
-| Base URL | `https://openrouter.ai/api/v1` |
-| 文生图端点 | `/images/generations` |
+| Base URL | `https://apirouter.myevia.io/v1` |
+| 文生图端点 | `/chat/completions`（通过文本 Prompt 生成） |
 | 图生图端点 | `/chat/completions`（多模态输入） |
-| 模型 | `openai/gpt-5.4-image-2` |
+| 模型 | `gpt-image-2` |
 | 认证 | `Authorization: Bearer <API_KEY>` |
 
 **⚠️ API Key 获取方式**（按优先级）：
-1. 读取环境变量 `OPENROUTER_API_KEY`
+1. 读取环境变量 `API_ROUTER_KEY`
 2. 读取 `~/.workbuddy/skills/image-creator/.api_key` 文件
 3. 以上都没有 → 回到阶段 1.2 向用户询问
 
@@ -372,33 +372,45 @@ Warm and comfortable atmosphere, color tones leaning toward warm brown, beige, a
 
 如果脚本不可用，可直接用 curl + Python 调用 API：
 
-**文生图**：
+**文生图**（通过 chat/completions 端点）：
 
 ```bash
-curl -s https://openrouter.ai/api/v1/images/generations \
+curl -s https://apirouter.myevia.io/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+  -H "Authorization: Bearer $API_ROUTER_KEY" \
   -d '{
-    "model": "openai/gpt-5.4-image-2",
-    "prompt": "<英文Prompt>",
-    "n": 1,
-    "size": "1024x1792"
+    "model": "gpt-image-2",
+    "messages": [{
+      "role": "user",
+      "content": "Generate an image: <英文Prompt>"
+    }]
   }' | /Users/admin/.workbuddy/binaries/python/envs/default/bin/python3 -c "
-import sys, json, urllib.request, os
+import sys, json, base64, re, urllib.request
 data = json.load(sys.stdin)
-url = data['data'][0].get('url') or ''
-b64 = data['data'][0].get('b64_json') or ''
-if url:
-    urllib.request.urlretrieve(url, '/tmp/poster-output.png')
-    print('Saved from URL')
-elif b64:
-    import base64
-    with open('/tmp/poster-output.png', 'wb') as f:
-        f.write(base64.b64decode(b64))
-    print('Saved from base64')
-else:
-    print('Error: no image data in response')
-    print(json.dumps(data, indent=2))
+content = data['choices'][0]['message']['content']
+# 从 content 中提取图片 URL 或 base64
+if isinstance(content, list):
+    for part in content:
+        if part.get('type') == 'image_url':
+            img_url = part['image_url']['url']
+            if img_url.startswith('data:'):
+                b64_data = img_url.split(',', 1)[1]
+                with open('/tmp/poster-output.png', 'wb') as f:
+                    f.write(base64.b64decode(b64_data))
+                print('Saved from base64')
+            else:
+                urllib.request.urlretrieve(img_url, '/tmp/poster-output.png')
+                print('Saved from URL')
+            break
+elif isinstance(content, str):
+    # 可能在文本中包含 markdown 图片链接
+    urls = re.findall(r'https?://\S+\.(?:png|jpg|jpeg|webp)', content)
+    if urls:
+        urllib.request.urlretrieve(urls[0], '/tmp/poster-output.png')
+        print('Saved from URL in text')
+    else:
+        print('No image found in response')
+        print(content[:500])
 "
 ```
 
@@ -412,11 +424,11 @@ with open('/path/to/reference.jpg', 'rb') as f:
     print(base64.b64encode(f.read()).decode())
 ")
 
-curl -s https://openrouter.ai/api/v1/chat/completions \
+curl -s https://apirouter.myevia.io/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+  -H "Authorization: Bearer $API_ROUTER_KEY" \
   -d "{
-    \"model\": \"openai/gpt-5.4-image-2\",
+    \"model\": \"gpt-image-2\",
     \"messages\": [{
       \"role\": \"user\",
       \"content\": [
@@ -502,7 +514,7 @@ elif isinstance(content, str):
 | 生成超时 | API 默认 180s 超时，可增加到 300s |
 | 生成结果质量不佳 | 调整 Prompt，增加具体描述，重新生成（最多3次） |
 | 图生图输入图片过大 | 压缩图片后重试（建议 < 20MB） |
-| API 返回模型不支持 | 确认模型名为 `openai/gpt-5.4-image-2`，检查 OpenRouter 是否可用 |
+| API 返回模型不支持 | 确认模型名为 `gpt-image-2`，检查 API Router 是否可用 |
 | images/generations 不可用 | 改用 chat/completions 端点（图生图模式的方式） |
 | chat/completions 无图片输出 | 检查模型是否支持图片生成，尝试 images/generations 端点 |
 
@@ -514,7 +526,7 @@ elif isinstance(content, str):
 
 | 优先级 | 位置 | 说明 |
 |--------|------|------|
-| 1 | 环境变量 `OPENROUTER_API_KEY` | 首选 |
+| 1 | 环境变量 `API_ROUTER_KEY` | 首选 |
 | 2 | `~/.workbuddy/skills/image-creator/.api_key` | 备选存储 |
 
 ### 尺寸与场景对照

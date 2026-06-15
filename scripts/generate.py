@@ -21,8 +21,8 @@ import urllib.error
 import ssl
 
 # --- Configuration ---
-BASE_URL = "https://openrouter.ai/api/v1"
-MODEL = "openai/gpt-5.4-image-2"
+BASE_URL = "https://apirouter.myevia.io/v1"
+MODEL = "gpt-image-2"
 TIMEOUT = 180
 
 
