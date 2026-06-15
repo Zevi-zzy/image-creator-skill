@@ -29,7 +29,7 @@ TIMEOUT = 180
 def get_api_key():
     """Get API key from env var or stored file."""
     # 1. Environment variable
-    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    key = os.environ.get("API_ROUTER_KEY", "").strip()
     if key:
         return key
 
@@ -41,7 +41,7 @@ def get_api_key():
         if key:
             return key
 
-    print("ERROR: No API key found. Set OPENROUTER_API_KEY env var or store in ~/.workbuddy/skills/image-creator/.api_key", file=sys.stderr)
+    print("ERROR: No API key found. Set API_ROUTER_KEY env var or store in ~/.workbuddy/skills/image-creator/.api_key", file=sys.stderr)
     sys.exit(1)
 
 
@@ -296,7 +296,7 @@ def img2img(api_key, prompt, input_image_path, size, output_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Image Creator - OpenRouter API Image Generation")
+    parser = argparse.ArgumentParser(description="Image Creator - API Router Image Generation")
     parser.add_argument("--mode", choices=["text2img", "img2img"], required=True, help="Generation mode")
     parser.add_argument("--prompt", required=True, help="Text prompt for image generation")
     parser.add_argument("--input-image", help="Path to reference image (required for img2img mode)")
